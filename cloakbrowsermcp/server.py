@@ -681,7 +681,13 @@ def create_server(caps: set[str] | None = None) -> FastMCP:
     ) -> dict[str, Any]:
         """Fill an input inside a (possibly cross-origin) iframe via Playwright frame_locator.
 
-        Works for Braintree/Stripe/Adyen hosted fields. Example:
+        Uses Playwright's fill() — fast, but only dispatches a single `input`
+        event. Most fields (including Stripe/Adyen) accept this. Some hosted
+        fields (notably Braintree) track internal state via real keystroke
+        events and will reject fill() as "invalid" even though the DOM value
+        is correct — for those, use cloak_frame_type instead.
+
+        Example:
             frame_selector='#braintree-hosted-field-number'
             input_selector='#credit-card-number'
             value='4111111111111111'
@@ -699,6 +705,46 @@ def create_server(caps: set[str] | None = None) -> FastMCP:
             return {"status": "filled", "frame": fs, "input": isel, "length": len(v)}
 
         return await _safe_snap(_ff, page_id, frame_selector, input_selector, value)
+
+    @mcp.tool()
+    async def cloak_frame_type(
+        page_id: str,
+        frame_selector: str,
+        input_selector: str,
+        value: str,
+        delay: int = 20,
+        clear: bool = True,
+    ) -> dict[str, Any]:
+        """Type into an input inside a (possibly cross-origin) iframe via real
+        keystrokes — the correct choice for Braintree hosted fields.
+
+        Unlike cloak_frame_fill (which uses fill() and only fires an `input`
+        event), this uses press_sequentially() and dispatches full keydown/
+        keypress/keyup sequences that Braintree's validator needs to mark the
+        field as valid. Slower than fill, but required for Braintree.
+
+        Example:
+            frame_selector='#braintree-hosted-field-number'
+            input_selector='#credit-card-number'
+            value='4111111111111111'
+
+        Args:
+            page_id: Target page ID.
+            frame_selector: CSS selector of the iframe element in the parent page.
+            input_selector: CSS selector of the input inside the iframe.
+            value: Text to type.
+            delay: Milliseconds between keystrokes (default 20).
+            clear: Clear the field first via fill('') before typing (default True).
+        """
+        async def _ft(pid, fs, isel, v, d, c):
+            page = _session.get_page(pid)
+            loc = page.frame_locator(fs).locator(isel)
+            if c:
+                await loc.fill("")
+            await loc.press_sequentially(v, delay=d)
+            return {"status": "typed", "frame": fs, "input": isel, "length": len(v)}
+
+        return await _safe_snap(_ft, page_id, frame_selector, input_selector, value, delay, clear)
 
     @mcp.tool()
     async def cloak_scroll(
