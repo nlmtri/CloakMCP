@@ -615,6 +615,91 @@ def create_server(caps: set[str] | None = None) -> FastMCP:
 
         return await _safe_snap(_press, page_id, key)
 
+    # --- Low-level input (coordinate click, raw typing, iframe fill) ---
+
+    @mcp.tool()
+    async def cloak_mouse_click(
+        page_id: str,
+        x: float,
+        y: float,
+        button: str = "left",
+        click_count: int = 1,
+        delay: int = 0,
+    ) -> dict[str, Any]:
+        """Click at absolute viewport coordinates (x, y).
+
+        Emits a real, trusted mouse event — useful for clicking into
+        cross-origin iframes (e.g. Braintree/Stripe hosted fields) where
+        ref-based selectors can't reach. Focus transfers into the child
+        frame so subsequent cloak_keyboard_type goes into the iframe input.
+
+        Args:
+            page_id: Target page ID.
+            x: Viewport X coordinate (pixels).
+            y: Viewport Y coordinate (pixels).
+            button: 'left' | 'right' | 'middle'.
+            click_count: 1 for single-click, 2 for double.
+            delay: Milliseconds between mousedown and mouseup.
+        """
+        async def _mc(pid, cx, cy, btn, cc, dly):
+            page = _session.get_page(pid)
+            await page.mouse.click(cx, cy, button=btn, click_count=cc, delay=dly)
+            return {"status": "clicked", "x": cx, "y": cy, "button": btn}
+
+        return await _safe_snap(_mc, page_id, x, y, button, click_count, delay)
+
+    @mcp.tool()
+    async def cloak_keyboard_type(
+        page_id: str,
+        text: str,
+        delay: int = 20,
+    ) -> dict[str, Any]:
+        """Type text into whatever element currently has focus.
+
+        Unlike cloak_type (which targets a ref), this sends raw key events
+        to the focused element — including inputs inside cross-origin
+        iframes after a preceding cloak_mouse_click into that iframe.
+
+        Args:
+            page_id: Target page ID.
+            text: Text to type.
+            delay: Milliseconds between keystrokes (default 20 for human-like).
+        """
+        async def _kt(pid, t, d):
+            page = _session.get_page(pid)
+            await page.keyboard.type(t, delay=d)
+            return {"status": "typed", "length": len(t)}
+
+        return await _safe_snap(_kt, page_id, text, delay)
+
+    @mcp.tool()
+    async def cloak_frame_fill(
+        page_id: str,
+        frame_selector: str,
+        input_selector: str,
+        value: str,
+    ) -> dict[str, Any]:
+        """Fill an input inside a (possibly cross-origin) iframe via Playwright frame_locator.
+
+        Works for Braintree/Stripe/Adyen hosted fields. Example:
+            frame_selector='#braintree-hosted-field-number'
+            input_selector='#credit-card-number'
+            value='4111111111111111'
+
+        Args:
+            page_id: Target page ID.
+            frame_selector: CSS selector of the iframe element in the parent page.
+            input_selector: CSS selector of the input inside the iframe.
+            value: Text to fill.
+        """
+        async def _ff(pid, fs, isel, v):
+            page = _session.get_page(pid)
+            frame = page.frame_locator(fs)
+            await frame.locator(isel).fill(v)
+            return {"status": "filled", "frame": fs, "input": isel, "length": len(v)}
+
+        return await _safe_snap(_ff, page_id, frame_selector, input_selector, value)
+
     @mcp.tool()
     async def cloak_scroll(
         page_id: str,
